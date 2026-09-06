@@ -47,6 +47,11 @@ export interface Visit {
   createdAt: string;
 }
 
+/** A visit as displayed in the activity log, including its restaurant's name. */
+export interface VisitWithRestaurant extends Visit {
+  restaurantName: string;
+}
+
 // --- row mappers -------------------------------------------------------------
 
 /** NUMERIC -> number, preserving null. */
@@ -93,5 +98,15 @@ export function toVisit(row: Record<string, unknown>): Visit {
     amountSpent: num(row.amountSpent),
     notes: (row.notes as string | null) ?? null,
     createdAt: isoTimestamp(row.createdAt),
+  };
+}
+
+/** Convert a joined visit/restaurant row into an activity-log entry. */
+export function toVisitWithRestaurant(
+  row: Record<string, unknown>
+): VisitWithRestaurant {
+  return {
+    ...toVisit(row),
+    restaurantName: String(row.restaurantName),
   };
 }
