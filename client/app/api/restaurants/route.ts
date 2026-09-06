@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { pool } from '@/db/pool';
 import { handleError } from '@/lib/errors';
+import { parseRestaurantInput } from '@/lib/restaurantValidation';
 import { toRestaurant } from '@/lib/types';
 
 /**
@@ -27,16 +28,12 @@ export async function GET() {
  * POST /api/restaurants
  * Create a new restaurant.
  *
- * TODO (A2): implement. Read the restaurant fields from the request body,
- * insert a row, and return the created restaurant with a 201 status.
- *
- * TODO (A3): validate before you insert. Nothing validates anything today, so
- * `rating` happily accepts 6. Decide what valid means for each field and reject
- * bad bodies with a 400 rather than letting them reach the database.
+ * Validates the complete request body, inserts the row, and returns it with a
+ * 201 status.
  */
 export async function POST(req: Request) {
   try {
-    const { name, cuisine, address, rating } = await req.json();
+    const { name, cuisine, address, rating } = await parseRestaurantInput(req);
     const { rows } = await pool.query(
       `INSERT INTO restaurants (name, cuisine, address, rating)
        VALUES ($1, $2, $3, $4)
