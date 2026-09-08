@@ -10,12 +10,54 @@ type VisitLogProps = {
 
 export function VisitLog({ restaurants, initialVisits }: VisitLogProps) {
   const [visits, setVisits] = useState(initialVisits);
-  const [restaurantId, setRestaurantId] = useState('');
+  const [restaurantOptions, setRestaurantOptions] = useState(restaurants);
+  const [restaurantName, setRestaurantName] = useState('');
   const [date, setDate] = useState('');
   const [amountSpent, setAmountSpent] = useState('');
   const [notes, setNotes] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  async function findOrCreateRestaurantId(name: string): Promise<number> {
+    const normalizedName = name.trim();
+    const existing = restaurantOptions.find(
+      (restaurant) => restaurant.name.toLocaleLowerCase() === normalizedName.toLocaleLowerCase()
+    );
+
+    if (existing) return existing.id;
+
+    const response = await fetch('/api/restaurants', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: normalizedName }),
+    });
+    const payload: Restaurant | { error?: string } = await response.json();
+
+    if (response.ok) {
+      const restaurant = payload as Restaurant;
+      setRestaurantOptions((current) => [...current, restaurant]);
+      return restaurant.id;
+    }
+
+    // A restaurant with this name may have been created in another tab after
+    // this page loaded. Refresh once and reuse it rather than showing an error.
+    if (response.status === 409) {
+      const restaurantsResponse = await fetch('/api/restaurants');
+      if (restaurantsResponse.ok) {
+        const refreshedRestaurants = (await restaurantsResponse.json()) as Restaurant[];
+        const matchingRestaurant = refreshedRestaurants.find(
+          (restaurant) => restaurant.name.toLocaleLowerCase() === normalizedName.toLocaleLowerCase()
+        );
+
+        if (matchingRestaurant) {
+          setRestaurantOptions(refreshedRestaurants);
+          return matchingRestaurant.id;
+        }
+      }
+    }
+
+    throw new Error('error' in payload ? payload.error ?? 'Could not add restaurant' : 'Could not add restaurant');
+  }
 
   async function submitVisit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -23,11 +65,12 @@ export function VisitLog({ restaurants, initialVisits }: VisitLogProps) {
     setIsSubmitting(true);
 
     try {
+      const restaurantId = await findOrCreateRestaurantId(restaurantName);
       const response = await fetch('/api/visits', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          restaurantId: Number(restaurantId),
+          restaurantId,
           date,
           amountSpent: amountSpent === '' ? null : Number(amountSpent),
           notes: notes === '' ? null : notes,
@@ -41,36 +84,56 @@ export function VisitLog({ restaurants, initialVisits }: VisitLogProps) {
       }
 
       setVisits((currentVisits) => [payload as VisitWithRestaurant, ...currentVisits]);
+      setRestaurantName('');
       setDate('');
       setAmountSpent('');
       setNotes('');
-    } catch {
-      setError('Could not reach the server. Please try again.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not reach the server. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
   }
 
+  function formatDate(value: string) {
+    return new Intl.DateTimeFormat('en-US', {
+      month: 'short',
+      day: '2-digit',
+      year: 'numeric',
+      timeZone: 'UTC',
+    }).format(new Date(`${value}T00:00:00.000Z`));
+  }
+
   return (
-    <section className="mt-10 grid gap-8 md:grid-cols-[minmax(0,1fr)_18rem]">
-      <div>
-        <h2 className="mb-4 text-lg font-medium">Dining activity</h2>
+    <section className="activity-layout" aria-label="Dining activity tracker">
+      <div className="activity-panel">
+        <div className="panel-heading">
+          <div>
+            <h2>Activity log</h2>
+          </div>
+          <span className="live-badge"><span aria-hidden="true" /> Online</span>
+        </div>
+
         {visits.length === 0 ? (
-          <p className="rounded-lg border border-gray-200 bg-white p-4 text-sm text-gray-600">
+          <p className="empty-state">
             No visits logged yet.
           </p>
         ) : (
-          <ul className="space-y-3">
+          <ul className="activity-list">
             {visits.map((visit) => (
-              <li key={visit.id} className="rounded-lg border border-gray-200 bg-white p-4">
-                <div className="flex items-baseline justify-between gap-4">
-                  <span className="font-medium">{visit.restaurantName}</span>
-                  <span className="text-sm text-gray-500">
+              <li key={visit.id} className="activity-entry">
+                <span className="activity-node" aria-hidden="true" />
+                <div className="activity-entry__meta">
+                  <span>Report {visit.id.toString().padStart(3, '0')}</span>
+                  <time dateTime={visit.date}>{formatDate(visit.date)}</time>
+                </div>
+                <div className="activity-entry__main">
+                  <h3>{visit.restaurantName}</h3>
+                  <span className="spend-amount">
                     {visit.amountSpent === null ? '—' : `$${visit.amountSpent.toFixed(2)}`}
                   </span>
                 </div>
-                <div className="mt-1 text-sm text-gray-600">{visit.date}</div>
-                {visit.notes && <p className="mt-2 text-sm text-gray-600">{visit.notes}</p>}
+                {visit.notes && <p className="activity-notes">{visit.notes}</p>}
               </li>
             ))}
           </ul>
@@ -78,32 +141,36 @@ export function VisitLog({ restaurants, initialVisits }: VisitLogProps) {
       </div>
 
       <form
-        className="h-fit rounded-lg border border-gray-200 bg-white p-4"
+        className="report-panel"
         onSubmit={submitVisit}
       >
-        <h2 className="text-lg font-medium">Log a visit</h2>
-        <div className="mt-4 space-y-4">
-          <label className="block text-sm font-medium text-gray-700">
-            Restaurant
-            <select
-              className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
-              value={restaurantId}
-              onChange={(event) => setRestaurantId(event.target.value)}
+        <div className="report-panel__header">
+          <span className="report-icon" aria-hidden="true">+</span>
+          <div>
+            <h2>Log a visit</h2>
+          </div>
+        </div>
+
+        <div className="report-fields">
+          <label>
+            <span>Restaurant</span>
+            <input
+              list="restaurant-options"
+              value={restaurantName}
+              onChange={(event) => setRestaurantName(event.target.value)}
+              placeholder="Type a restaurant name"
               required
-            >
-              <option value="">Select a restaurant</option>
-              {restaurants.map((restaurant) => (
-                <option key={restaurant.id} value={restaurant.id}>
-                  {restaurant.name}
-                </option>
+            />
+            <datalist id="restaurant-options">
+              {restaurantOptions.map((restaurant) => (
+                <option key={restaurant.id} value={restaurant.name} />
               ))}
-            </select>
+            </datalist>
           </label>
 
-          <label className="block text-sm font-medium text-gray-700">
-            Date
+          <label>
+            <span>Date</span>
             <input
-              className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
               type="date"
               value={date}
               onChange={(event) => setDate(event.target.value)}
@@ -111,10 +178,9 @@ export function VisitLog({ restaurants, initialVisits }: VisitLogProps) {
             />
           </label>
 
-          <label className="block text-sm font-medium text-gray-700">
-            Amount spent
+          <label>
+            <span>Amount spent</span>
             <input
-              className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
               type="number"
               min="0"
               max="99999999.99"
@@ -126,10 +192,9 @@ export function VisitLog({ restaurants, initialVisits }: VisitLogProps) {
             />
           </label>
 
-          <label className="block text-sm font-medium text-gray-700">
-            Notes
+          <label>
+            <span>Notes</span>
             <textarea
-              className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
               value={notes}
               onChange={(event) => setNotes(event.target.value)}
               rows={3}
@@ -139,17 +204,18 @@ export function VisitLog({ restaurants, initialVisits }: VisitLogProps) {
         </div>
 
         {error && (
-          <p className="mt-4 text-sm text-red-600" role="alert">
+          <p className="form-error" role="alert">
             {error}
           </p>
         )}
 
         <button
-          className="mt-4 w-full rounded-md bg-gray-900 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+          className="report-submit"
           disabled={isSubmitting}
           type="submit"
         >
-          {isSubmitting ? 'Saving…' : 'Log visit'}
+          <span>{isSubmitting ? 'Transmitting…' : 'Submit report'}</span>
+          <span aria-hidden="true">→</span>
         </button>
       </form>
     </section>
